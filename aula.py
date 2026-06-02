@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout
 from PyQt6.QtCore import QTimer, Qt
 import pyqtgraph as pg
 import csv
+import os
 from datetime import datetime
 
 class painel_telemetria(QMainWindow):
@@ -45,8 +46,7 @@ class painel_telemetria(QMainWindow):
         # === ESQUERDA: PEDAIS ===
         layout_pedais = QHBoxLayout()
 
-        # CORREÇÃO 2 e 3: Renomeei para self.bar_freio para bater com a função lá embaixo
-        # E removi a criação duplicada do pg.PlotWidget anterior
+        
         self.bar_freio = QProgressBar()
         self.bar_freio.setOrientation(Qt.Orientation.Vertical)
         self.bar_freio.setRange(0,100)
@@ -55,14 +55,13 @@ class painel_telemetria(QMainWindow):
             QProgressBar::chunk { background-color: #ff3333; } 
         """)
 
-        # Renomeei para self.bar_acelerador
         self.bar_acelerador = QProgressBar()
         self.bar_acelerador.setOrientation(Qt.Orientation.Vertical)
         self.bar_acelerador.setRange(0,100)
         self.bar_acelerador.setStyleSheet("""
             QProgressBar { border: 2px solid #555; border-radius: 5px; background: #333; }
             QProgressBar::chunk { background-color: #00ff00; } 
-        """) # Mudei para verde (#00ff00) pra diferenciar do freio
+        """)
 
         lbl_freio = QLabel("FREIO")
         lbl_accel = QLabel("ACELERADOR")
@@ -190,15 +189,18 @@ class painel_telemetria(QMainWindow):
             QMessageBox.warning(self, "aviso, nenhum arquivo dado pra salvar ainda!")
             return
         
+        pasta_destino = "dados_telemetria"
+        os.makedirs(pasta_destino, exist_ok=True)
         nome_arquivo = f'Telemetria_{datetime.now().strftime('%d-%m-%Y-%H-%M-%S')}.csv'
+        caminho_completo = os.path.join(pasta_destino, nome_arquivo)
 
         try:
-            with open(nome_arquivo, mode="w", newline='') as arquivo:
+            with open(caminho_completo, mode="w", newline='') as arquivo:
                 escritor= csv.writer(arquivo)
                 escritor.writerow(["Tempo", "RPM", "Acelerador", "Freio"])
                 escritor.writerows(self.historico_completo)
 
-            QMessageBox.information(self, "Sucesso", f"dados salvos em:\n{nome_arquivo}")
+            QMessageBox.information(self, "Sucesso", f"dados salvos em:\n{caminho_completo}")
         
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"erro ao salvar o arquivo {e}")

@@ -1,223 +1,164 @@
-import sys
-import random
-import time
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QProgressBar, QLabel, QPushButton, QMessageBox)
-from PyQt6.QtCore import QTimer, Qt
-import pyqtgraph as pg
-import csv
+import pandas as pd
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.ticker import MaxNLocator
+import tkinter as tk
+from tkinter import filedialog, ttk, messagebox
 import os
-from datetime import datetime
 
-class painel_telemetria(QMainWindow):
-    def __init__(self):
-        super().__init__()
+df_referencia = None
+df_comparacao = None
+nome_arquivo_referencia = ""
+nome_arquivo_comparacao = ""
 
+raiz = tk.Tk()
+raiz.withdraw()
 
-        self.setWindowTitle("Telemetria Kart")
-        self.resize(1000,700)
-        self.setStyleSheet("background-color: black; color: white;")
+print("Selecione o arquivo de telemetria de referência...")
+caminho_arquivo = filedialog.askopenfilename(
+    title="Selecione o arquivo de telemetria (Referência)",
+    filetypes=[("Arquivos CSV", "*.csv"), ("Todos os arquivos", "*.*")]
+)
 
-        widget_central = QWidget()
-        self.setCentralWidget(widget_central)
+if not caminho_arquivo:
+    print("Nenhum arquivo selecionado. Encerrando programa.")
+    exit()
+
+try:
+    df_referencia = pd.read_csv(caminho_arquivo)
+    nome_arquivo_referencia = os.path.basename(caminho_arquivo)
+
+    # Limpamos as colunas administrativas para sobrar apenas os Sensores reais
+    sensores_disponiveis = df_referencia.columns.tolist()
+    colunas_ignorar = ['Volta', 'Tempo_Volta', 'Tempo', 'Hora']
+    for col in colunas_ignorar:
+        if col in sensores_disponiveis:
+            sensores_disponiveis.remove(col)
+
+    voltas_referencia = df_referencia['Volta'].unique().tolist()
+
+    janela_painel = tk.Toplevel()
+    janela_painel.title("Painel de Telemetria - Análise por Voltas")
+    janela_painel.geometry("1100x650") 
+
+    # --- FRAME SUPERIOR (Controles de Sensores e Comparação) ---
+    frame_controles = tk.Frame(janela_painel)
+    frame_controles.pack(side=tk.TOP, fill=tk.X, pady=5, padx=10)
+
+    tk.Label(frame_controles, text="Sensor:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+    combo_sensores = ttk.Combobox(frame_controles, values=sensores_disponiveis, state="readonly", width=15)
+    combo_sensores.pack(side=tk.LEFT, padx=5)
+    if sensores_disponiveis: combo_sensores.current(0)
+
+    def carregar_comparacao():
+        global df_comparacao, nome_arquivo_comparacao
+        caminho_comp = filedialog.askopenfilename(
+            title="Selecione o arquivo de telemetria para Comparação",
+            filetypes=[("Arquivos CSV", "*.csv")]
+        )
+        if caminho_comp:
+            try:
+                df_comparacao = pd.read_csv(caminho_comp)
+                nome_arquivo_comparacao = os.path.basename(caminho_comp)
+                
+                # Preenche as opções de volta para o segundo arquivo
+                voltas_comparacao = df_comparacao['Volta'].unique().tolist()
+                combo_volta_comp['values'] = voltas_comparacao
+                combo_volta_comp.current(0)
+                
+                btn_comparar.config(text="Trocar Comparação", bg="#17a2b8")
+                messagebox.showinfo("Sucesso", f"Arquivo carregado:\n{nome_arquivo_comparacao}")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao ler o arquivo:\n{e}")
+
+    btn_comparar = tk.Button(frame_controles, text="+ Adicionar Comparação", command=carregar_comparacao, bg="#6c757d", fg="white", font=("Arial", 9, "bold"))
+    btn_comparar.pack(side=tk.LEFT, padx=15)
+
+    btn_gerar = tk.Button(frame_controles, text="GERAR GRÁFICO", command=lambda: gerar_grafico(), bg="#28a745", fg="white", font=("Arial", 10, "bold"))
+    btn_gerar.pack(side=tk.RIGHT, padx=10)
+
+    # --- FRAME SECUNDÁRIO (Seletores de Volta) ---
+    frame_voltas = tk.Frame(janela_painel)
+    frame_voltas.pack(side=tk.TOP, fill=tk.X, pady=5, padx=10)
+
+    tk.Label(frame_voltas, text="Volta Referência:", font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
+    combo_volta_ref = ttk.Combobox(frame_voltas, values=voltas_referencia, state="readonly", width=10)
+    combo_volta_ref.pack(side=tk.LEFT, padx=5)
+    if voltas_referencia: combo_volta_ref.current(0)
+
+    tk.Label(frame_voltas, text="Volta Comparação:", font=("Arial", 9)).pack(side=tk.LEFT, padx=20)
+    combo_volta_comp = ttk.Combobox(frame_voltas, state="readonly", width=10)
+    combo_volta_comp.pack(side=tk.LEFT, padx=5)
+
+    # --- FRAME INFERIOR (Gráfico) ---
+    frame_grafico = tk.Frame(janela_painel, bd=2, relief=tk.SUNKEN)
+    frame_grafico.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    canvas_matplotlib_atual = None
+    toolbar_atual = None
+
+    def gerar_grafico():
+        global canvas_matplotlib_atual, toolbar_atual
+
+        if canvas_matplotlib_atual is not None:
+            canvas_matplotlib_atual.get_tk_widget().destroy()
+        if toolbar_atual is not None:
+            toolbar_atual.destroy()
+
+        sensor_escolhido = combo_sensores.get()
+        volta_ref_escolhida = int(combo_volta_ref.get())
+
+        # Filtra apenas os dados da volta selecionada
+        df_ref_filtrado = df_referencia[df_referencia['Volta'] == volta_ref_escolhida]
+
+        fig = Figure(figsize=(10, 5), dpi=100)
+        ax = fig.add_subplot(111)
+
+        # Plotagem usando o Tempo_Volta como eixo X
+        ax.plot(
+            df_ref_filtrado['Tempo_Volta'], 
+            df_ref_filtrado[sensor_escolhido], 
+            color='#1f77b4', 
+            linewidth=1.5, 
+            linestyle='--', 
+            alpha=0.6, 
+            label=f"Ref: {nome_arquivo_referencia} (Volta {volta_ref_escolhida})"
+        )
         
-        # 1. LAYOUT PRINCIPAL (Vertical)
-        # Mantemos ele como a "espinha dorsal" da janela
-        layout_principal = QVBoxLayout()
-        widget_central.setLayout(layout_principal)
+        if df_comparacao is not None and combo_volta_comp.get() != "":
+            volta_comp_escolhida = int(combo_volta_comp.get())
+            df_comp_filtrado = df_comparacao[df_comparacao['Volta'] == volta_comp_escolhida]
 
-        # --- ÁREA SUPERIOR: GRÁFICO RPM ---
-        self.grafico_rpm = pg.PlotWidget(title = "Rotação do motor (RPM)")
-        self.grafico_rpm.showGrid(x=True, y=True, alpha = 0.3)
-        self.grafico_rpm.setYRange(0, 15000) # Ajustei para 15k (3000 é muito baixo para Kart)
-        self.grafico_rpm.setBackground("k")
-        styles = {'color':'#b0b0b0', 'font-size':'12px'}
-        self.grafico_rpm.getPlotItem().setLabel('left', 'Rotação', **styles)
-        self.grafico_rpm.getPlotItem().setLabel('bottom', 'Tempo (s)', **styles)
+            if sensor_escolhido in df_comparacao.columns:
+                ax.plot(
+                    df_comp_filtrado['Tempo_Volta'], 
+                    df_comp_filtrado[sensor_escolhido], 
+                    color='#ff7f0e', 
+                    linewidth=1.5, 
+                    alpha=1.0, 
+                    label=f"Comp: {nome_arquivo_comparacao} (Volta {volta_comp_escolhida})"
+                )
+            else:
+                messagebox.showwarning("Aviso", f"O sensor não existe no arquivo de comparação.")
+
+        ax.set_title(f"Telemetria - {sensor_escolhido}", fontsize=14, fontweight='bold', pad=10)
+        ax.set_xlabel("Tempo Decorrido na Volta (Segundos)", fontsize=11)
+        ax.set_ylabel("Valor", fontsize=11)
+        ax.grid(True, linestyle='--', alpha=0.6)
         
-        # Adiciona o gráfico ao layout principal
-        layout_principal.addWidget(self.grafico_rpm, stretch=2)
+        ax.legend(loc="upper right", fontsize=9)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=15))
+        fig.tight_layout()
 
-        # --- ÁREA INFERIOR: PEDAIS E TEMPO ---
-        layout_inferior = QHBoxLayout() # Cria o layout horizontal
+        canvas_matplotlib_atual = FigureCanvasTkAgg(fig, master=frame_grafico)
+        widget_grafico = canvas_matplotlib_atual.get_tk_widget()
+        widget_grafico.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         
-        # CORREÇÃO 1: Adiciona o layout inferior ao principal corretamente
-        layout_principal.addLayout(layout_inferior, stretch=1)
+        toolbar_atual = NavigationToolbar2Tk(canvas_matplotlib_atual, frame_grafico)
+        toolbar_atual.update()
+        canvas_matplotlib_atual.draw()
 
-        # === ESQUERDA: PEDAIS ===
-        layout_pedais = QHBoxLayout()
+    janela_painel.mainloop()
 
-        
-        self.bar_freio = QProgressBar()
-        self.bar_freio.setOrientation(Qt.Orientation.Vertical)
-        self.bar_freio.setRange(0,100)
-        self.bar_freio.setStyleSheet("""
-            QProgressBar { border: 2px solid #555; border-radius: 5px; background: #333; }
-            QProgressBar::chunk { background-color: #ff3333; } 
-        """)
-
-        self.bar_acelerador = QProgressBar()
-        self.bar_acelerador.setOrientation(Qt.Orientation.Vertical)
-        self.bar_acelerador.setRange(0,100)
-        self.bar_acelerador.setStyleSheet("""
-            QProgressBar { border: 2px solid #555; border-radius: 5px; background: #333; }
-            QProgressBar::chunk { background-color: #00ff00; } 
-        """)
-
-        lbl_freio = QLabel("FREIO")
-        lbl_accel = QLabel("ACELERADOR")
-
-        # Coluna do Freio
-        col_freio = QVBoxLayout()
-        col_freio.addWidget(self.bar_freio)
-        col_freio.addWidget(lbl_freio, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # Coluna do Acelerador
-        col_acelerador = QVBoxLayout()
-        col_acelerador.addWidget(self.bar_acelerador)
-        col_acelerador.addWidget(lbl_accel, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        layout_pedais.addLayout(col_freio)
-        layout_pedais.addLayout(col_acelerador)
-
-        layout_inferior.addLayout(layout_pedais)
-
-        # === DIREITA: TEMPO ===
-        layout_tempo = QVBoxLayout()
-        layout_tempo.setContentsMargins(50,0,50,0)
-        font_style = "font-size: 30px; font-weight: bold; font-family: monospace;"
-
-        self.lbl_tempo_atual = QLabel("00:00:000")
-        self.lbl_tempo_atual.setStyleSheet(f"color: white; {font_style}")
-
-        self.lbl_melhor_volta = QLabel("BEST: --:--.---")
-        self.lbl_melhor_volta.setStyleSheet("color: #aaaaaa; font-size: 20px;")
-
-        self.lbl_delta = QLabel("DELTA: +0.000")
-        self.lbl_delta.setStyleSheet(f"color: white; {font_style}")
-
-        layout_tempo.addWidget(QLabel("TEMPO ATUAL:"))
-        layout_tempo.addWidget(self.lbl_tempo_atual)
-        layout_tempo.addSpacing(20)
-        layout_tempo.addWidget(self.lbl_melhor_volta)
-        layout_tempo.addWidget(self.lbl_delta)
-        layout_tempo.addStretch()
-
-        layout_inferior.addLayout(layout_tempo)
-
-        self.historico_completo = []
-        layout_botoes = QHBoxLayout()
-
-        self.btn_reset = QPushButton("Resetar tempos")
-        self.btn_reset.setStyleSheet("background-color: black; color: white; padding:10px; font-weight: bold;")
-        self.btn_reset.clicked.connect(self.reiniciar_tempos)
-
-        self.btn_salvar = QPushButton("Salvar dados")
-        self.btn_salvar.setStyleSheet("background-color: black; color: white; padding:10px; font-weight: bold;")
-        self.btn_salvar.clicked.connect(self.salvar_telemetria)
-
-        layout_botoes.addWidget(self.btn_reset)
-        layout_botoes.addWidget(self.btn_salvar)
-
-        layout_principal.addLayout(layout_botoes)
-
-        # --- DADOS E VARIÁVEIS ---
-        self.x = list(range(100))
-        self.y = [0] * 100
-        self.linha_rpm = self.grafico_rpm.plot(self.x, self.y, pen=pg.mkPen('#00ccff', width=2))
-        
-        self.inicio_volta = time.time()
-        self.melhor_tempo_s = None 
-        
-        self.timer = QTimer()
-        self.timer.setInterval(16) 
-        self.timer.timeout.connect(self.atualizar_tudo)
-        self.timer.start()
-
-    def atualizar_tudo(self):
-        # Simulação
-        rpm = random.randint(8000, 13000)
-        freio = 0
-        acel = random.randint(50, 100)
-        
-        if random.random() < 0.05: 
-            rpm = random.randint(4000, 7000)
-            freio = random.randint(60, 100)
-            acel = 0
-
-        # Atualiza Gráfico
-        self.y.pop(0)
-        self.y.append(rpm)
-        self.linha_rpm.setData(self.x, self.y)
-
-        # Atualiza Pedais (Agora os nomes batem!)
-        self.bar_freio.setValue(freio)
-        self.bar_acelerador.setValue(acel)
-
-        # Lógica de Tempo
-        agora = time.time()
-        tempo_decorrido = agora - self.inicio_volta
-        
-        mins = int(tempo_decorrido // 60)
-        segs = int(tempo_decorrido % 60)
-        milis = int((tempo_decorrido * 1000) % 1000)
-        self.lbl_tempo_atual.setText(f"{mins:02}:{segs:02}.{milis:03}")
-
-
-        if self.melhor_tempo_s:
-            delta = tempo_decorrido - (self.melhor_tempo_s * (tempo_decorrido/self.melhor_tempo_s)) + random.uniform(-0.5, 0.5)
-            sinal = "+" if delta > 0 else "-"
-            cor = "#ff5555" if delta > 0 else "#55ff55"
-            self.lbl_delta.setText(f"DELTA: {sinal}{abs(delta):.3f}")
-            self.lbl_delta.setStyleSheet(f"color: {cor}; font-size: 30px; font-weight: bold; font-family: monospace;")
-        
-        if tempo_decorrido > 10.0:
-            self.fechar_volta(tempo_decorrido)
-
-        timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-        self.historico_completo.append([timestamp, rpm, acel, freio])
-
-    def reiniciar_tempos(self, checked = None):
-        self.inicio_volta = time.time()
-        self.melhor_tempo_s = None
-        self.lbl_melhor_volta.setText("BEST: --:--:---")
-        self.lbl_melhor_volta.setStyleSheet("color: #aaaaaa; font-size: 20px;")
-        self.lbl_delta.setText("Delta: +0.000")
-        self.lbl_delta.setStyleSheet("color: white; font-size: 30px; font-weight: bold; font-family: monospace;")
-    
-    def salvar_telemetria(self, checked = None):
-        if not self.historico_completo:
-            QMessageBox.warning(self, "aviso, nenhum arquivo dado pra salvar ainda!")
-            return
-        
-        pasta_destino = "dados_telemetria"
-        os.makedirs(pasta_destino, exist_ok=True)
-        nome_arquivo = f'Telemetria_{datetime.now().strftime('%d-%m-%Y-%H-%M-%S')}.csv'
-        caminho_completo = os.path.join(pasta_destino, nome_arquivo)
-
-        try:
-            with open(caminho_completo, mode="w", newline='') as arquivo:
-                escritor= csv.writer(arquivo)
-                escritor.writerow(["Tempo", "RPM", "Acelerador", "Freio"])
-                escritor.writerows(self.historico_completo)
-
-            QMessageBox.information(self, "Sucesso", f"dados salvos em:\n{caminho_completo}")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"erro ao salvar o arquivo {e}")
-
-    def fechar_volta(self, tempo_final):
-        if self.melhor_tempo_s is None or tempo_final < self.melhor_tempo_s:
-            self.melhor_tempo_s = tempo_final
-            mins = int(tempo_final // 60)
-            segs = int(tempo_final % 60)
-            milis = int((tempo_final * 1000) % 1000)
-            self.lbl_melhor_volta.setText(f"BEST: {mins:02}:{segs:02}.{milis:03}")
-            self.lbl_melhor_volta.setStyleSheet("color: #55ff55; font-size: 20px; font-weight: bold;") 
-        
-        self.inicio_volta = time.time()
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    janela = painel_telemetria()
-    janela.show()
-    sys.exit(app.exec())
+except Exception as e:
+    print(f'Erro fatal ao iniciar o programa: {e}')
